@@ -1,250 +1,394 @@
 import os
+import sqlite3
 import pickle
+from hashlib import sha256
 import streamlit as st
 from streamlit_option_menu import option_menu
+from streamlit_cookies_manager import EncryptedCookieManager
 
-# Set page configuration
-st.set_page_config(page_title="Health Assistant",
-                   layout="wide",
-                   page_icon="🧑‍⚕️")
+st.set_page_config(page_title="Health Assistant", layout="wide", page_icon="🩺")
 
-    
-# getting the working directory of the main.py
-working_dir = os.path.dirname(os.path.abspath(__file__))
+# Initialize cookies manager
+cookies = EncryptedCookieManager(
+    password=os.environ.get("COOKIE_PASSWORD", "a_secure_password")
+)
+if not cookies.ready():
+    st.stop()
 
-# loading the saved models
+# Hashing passwords for security
+def hash_password(password):
+    return sha256(password.encode()).hexdigest()
 
-diabetes_model = pickle.load(open(f'{working_dir}/saved_models/diabetes_model.sav', 'rb'))
+# Database management without persistent connections
+def execute_query(query, params=(), fetch=False):
+    os.makedirs("database", exist_ok=True)
+    conn = sqlite3.connect("database/users.db")
+    conn.execute("PRAGMA foreign_keys = ON")
+    cursor = conn.cursor()
+    cursor.execute(query, params)
+    conn.commit()
+    if fetch:
+        results = cursor.fetchall()
+        conn.close()
+        return results
+    conn.close()
 
-heart_disease_model = pickle.load(open(f'{working_dir}/saved_models/heart_disease_model.sav', 'rb'))
+# Initialize database with default admin user
+def initialize_database():
+    execute_query('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            is_admin BOOLEAN DEFAULT 0
+        )
+    ''')
+    try:
+        execute_query('''
+            INSERT INTO users (username, email, password, is_admin)
+            VALUES (?, ?, ?, ?)
+        ''', ('admin', 'admin@example.com', hash_password('admin123'), 1))
+    except sqlite3.IntegrityError:
+        pass  # Admin user already exists
 
-parkinsons_model = pickle.load(open(f'{working_dir}/saved_models/parkinsons_model.sav', 'rb'))
+# Check login state
+def check_login():
+    username = cookies.get("username")
+    is_admin = cookies.get("is_admin") == "True"
+    return username, is_admin
 
-# sidebar for navigation
-with st.sidebar:
-    selected = option_menu('Multiple Disease Prediction System',
+# Set login state
+def set_login(username, is_admin):
+    cookies["username"] = username
+    cookies["is_admin"] = str(is_admin)
+    cookies.save()
 
-                           ['Diabetes Prediction',
-                            'Heart Disease Prediction',
-                            'Parkinsons Prediction'],
-                           menu_icon='hospital-fill',
-                           icons=['activity', 'heart', 'person'],
-                           default_index=0)
+# Clear login state
+def clear_login():
+    cookies["username"] = ""
+    cookies["is_admin"] = ""
+    cookies.save()
 
+# Load machine learning models
+@st.cache_data
+def load_models():
+    working_dir = os.path.dirname(os.path.abspath(__file__))
+    diabetes_model = pickle.load(open(f"{working_dir}/saved_models/diabetes_model.sav", "rb"))
+    heart_disease_model = pickle.load(open(f"{working_dir}/saved_models/heart_disease_model.sav", "rb"))
+    parkinsons_model = pickle.load(open(f"{working_dir}/saved_models/parkinsons_model.sav", "rb"))
+    return diabetes_model, heart_disease_model, parkinsons_model
 
-# Diabetes Prediction Page
-if selected == 'Diabetes Prediction':
+# Home Page
+def homepage():
+    st.title("Welcome to Health Assistant App 🩺")
+    st.subheader("Your reliable assistant for health predictions and management.")
+    st.write("""
+    This application allows users to:
+    - Predict the likelihood of **Diabetes**, **Heart Disease**, or **Parkinson's Disease** using advanced machine learning models.
+    - Maintain and manage user accounts.
+    - Provide secure login for both users and admins.
+    """)
+    st.info("Please log in or register to access the dashboard.")
 
-    # page title
-    st.title('Diabetes Prediction using ML')
+# Login Page
+def login():
+    st.title("Login")
+    username_or_email = st.text_input("Username or Email")
+    password = st.text_input("Password", type="password")
 
-    # getting the input data from the user
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        Pregnancies = st.text_input('Number of Pregnancies')
-
-    with col2:
-        Glucose = st.text_input('Glucose Level')
-
-    with col3:
-        BloodPressure = st.text_input('Blood Pressure value')
-
-    with col1:
-        SkinThickness = st.text_input('Skin Thickness value')
-
-    with col2:
-        Insulin = st.text_input('Insulin Level')
-
-    with col3:
-        BMI = st.text_input('BMI value')
-
-    with col1:
-        DiabetesPedigreeFunction = st.text_input('Diabetes Pedigree Function value')
-
-    with col2:
-        Age = st.text_input('Age of the Person')
-
-
-    # code for Prediction
-    diab_diagnosis = ''
-
-    # creating a button for Prediction
-
-    if st.button('Diabetes Test Result'):
-
-        user_input = [Pregnancies, Glucose, BloodPressure, SkinThickness, Insulin,
-                      BMI, DiabetesPedigreeFunction, Age]
-
-        user_input = [float(x) for x in user_input]
-
-        diab_prediction = diabetes_model.predict([user_input])
-
-        if diab_prediction[0] == 1:
-            diab_diagnosis = 'The person is diabetic'
+    if st.button("Login"):
+        if not username_or_email or not password:
+            st.error("Please fill out both fields!")
         else:
-            diab_diagnosis = 'The person is not diabetic'
+            user = execute_query(
+                "SELECT * FROM users WHERE (username = ? OR email = ?) AND password = ?",
+                (username_or_email, username_or_email, hash_password(password)),
+                fetch=True
+            )
+            if user:
+                st.success(f"Welcome, {user[0][1]}!")
+                set_login(user[0][1], bool(user[0][4]))
+                st.experimental_rerun()
+            else:
+                st.error("Invalid username/email or password.")
 
-    st.success(diab_diagnosis)
+# Register Page
+def register():
+    st.title("Register")
+    username = st.text_input("Username")
+    email = st.text_input("Email")
+    password = st.text_input("Password", type="password")
+    confirm_password = st.text_input("Confirm Password", type="password")
 
-# Heart Disease Prediction Page
-if selected == 'Heart Disease Prediction':
-
-    # page title
-    st.title('Heart Disease Prediction using ML')
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        age = st.text_input('Age')
-
-    with col2:
-        sex = st.text_input('Sex')
-
-    with col3:
-        cp = st.text_input('Chest Pain types')
-
-    with col1:
-        trestbps = st.text_input('Resting Blood Pressure')
-
-    with col2:
-        chol = st.text_input('Serum Cholestoral in mg/dl')
-
-    with col3:
-        fbs = st.text_input('Fasting Blood Sugar > 120 mg/dl')
-
-    with col1:
-        restecg = st.text_input('Resting Electrocardiographic results')
-
-    with col2:
-        thalach = st.text_input('Maximum Heart Rate achieved')
-
-    with col3:
-        exang = st.text_input('Exercise Induced Angina')
-
-    with col1:
-        oldpeak = st.text_input('ST depression induced by exercise')
-
-    with col2:
-        slope = st.text_input('Slope of the peak exercise ST segment')
-
-    with col3:
-        ca = st.text_input('Major vessels colored by flourosopy')
-
-    with col1:
-        thal = st.text_input('thal: 0 = normal; 1 = fixed defect; 2 = reversable defect')
-
-    # code for Prediction
-    heart_diagnosis = ''
-
-    # creating a button for Prediction
-
-    if st.button('Heart Disease Test Result'):
-
-        user_input = [age, sex, cp, trestbps, chol, fbs, restecg, thalach, exang, oldpeak, slope, ca, thal]
-
-        user_input = [float(x) for x in user_input]
-
-        heart_prediction = heart_disease_model.predict([user_input])
-
-        if heart_prediction[0] == 1:
-            heart_diagnosis = 'The person is having heart disease'
+    if st.button("Register"):
+        if not username or not email or not password or not confirm_password:
+            st.error("All fields are required!")
+        elif password != confirm_password:
+            st.error("Passwords do not match!")
         else:
-            heart_diagnosis = 'The person does not have any heart disease'
+            try:
+                execute_query(
+                    "INSERT INTO users (username, email, password) VALUES (?, ?, ?)",
+                    (username, email, hash_password(password))
+                )
+                st.success("Registration successful! Redirecting to login...")
+                st.experimental_rerun()
+            except sqlite3.IntegrityError:
+                st.error("Username or email already exists.")
 
-    st.success(heart_diagnosis)
+# Admin Dashboard
+def admin_dashboard():
+    st.title("Admin Dashboard")
+    st.subheader("Manage Users")
 
-# Parkinson's Prediction Page
-if selected == "Parkinsons Prediction":
+    users = execute_query("SELECT username, email FROM users", fetch=True)
+    st.table(users)
 
-    # page title
-    st.title("Parkinson's Disease Prediction using ML")
+    st.subheader("Edit or Delete Users")
+    user_id = st.number_input("User ID", min_value=1, step=1)
+    action = st.radio("Action", ["Edit", "Delete"], horizontal=True)
 
-    col1, col2, col3, col4, col5 = st.columns(5)
+    if action == "Edit":
+        new_username = st.text_input("New Username")
+        new_email = st.text_input("New Email")
+        new_password = st.text_input("New Password", type="password")
+        new_is_admin = st.checkbox("Is Admin?", value=False)
 
-    with col1:
-        fo = st.text_input('MDVP:Fo(Hz)')
+        if st.button("Update User"):
+            if not new_username or not new_email:
+                st.error("Username and email cannot be empty!")
+            elif new_password and len(new_password) < 6:
+                st.error("Password must be at least 6 characters long!")
+            else:
+                try:
+                    params = [new_username, new_email, int(new_is_admin), user_id]
+                    query = "UPDATE users SET username = ?, email = ?, is_admin = ? WHERE id = ?"
+                    if new_password:
+                        query = "UPDATE users SET username = ?, email = ?, is_admin = ?, password = ? WHERE id = ?"
+                        params.insert(3, hash_password(new_password))
+                    execute_query(query, tuple(params))
+                    st.success("User updated successfully!")
+                    st.experimental_rerun()
+                except sqlite3.IntegrityError:
+                    st.error("Failed to update user. Username or email may already exist.")
 
-    with col2:
-        fhi = st.text_input('MDVP:Fhi(Hz)')
+    elif action == "Delete":
+        if st.button("Delete User"):
+            execute_query("DELETE FROM users WHERE id = ?", (user_id,))
+            st.success("User deleted successfully!")
+            st.experimental_rerun()
 
-    with col3:
-        flo = st.text_input('MDVP:Flo(Hz)')
+# Disease Prediction Dashboard
+def disease_prediction_dashboard():
+    st.title("Disease Prediction Dashboard")
+    st.subheader(f"Welcome, {cookies.get('username', 'User')}")
 
-    with col4:
-        Jitter_percent = st.text_input('MDVP:Jitter(%)')
+    # Load models
+    diabetes_model, heart_disease_model, parkinsons_model = load_models()
 
-    with col5:
-        Jitter_Abs = st.text_input('MDVP:Jitter(Abs)')
+    # Sidebar menu for navigation
+    selected = option_menu(
+        "Prediction Options",
+        ["Diabetes Prediction", "Heart Disease Prediction", "Parkinson's Prediction"],
+        icons=["activity", "heart", "person"],
+        menu_icon="stethoscope",
+        default_index=0,
+    )
 
-    with col1:
-        RAP = st.text_input('MDVP:RAP')
+    if selected == "Diabetes Prediction":
+        st.subheader("Diabetes Prediction")
+        col1, col2, col3 = st.columns(3)
 
-    with col2:
-        PPQ = st.text_input('MDVP:PPQ')
+        with col1:
+            Pregnancies = st.number_input("Number of Pregnancies", min_value=0, step=1)
+        with col2:
+            Glucose = st.number_input("Glucose Level (mg/dL)", min_value=0.0, step=1.0)
+        with col3:
+            BloodPressure = st.number_input("Blood Pressure (mmHg)", min_value=0.0, step=1.0)
+        with col1:
+            SkinThickness = st.number_input("Skin Thickness (mm)", min_value=0.0, step=1.0)
+        with col2:
+            Insulin = st.number_input("Insulin Level (IU/mL)", min_value=0.0, step=1.0)
+        with col3:
+            BMI = st.number_input("BMI (kg/m²)", min_value=0.0, step=0.1)
+        with col1:
+            DiabetesPedigreeFunction = st.number_input("Diabetes Pedigree Function", min_value=0.0, step=0.01)
+        with col2:
+            Age = st.number_input("Age (years)", min_value=0, step=1)
 
-    with col3:
-        DDP = st.text_input('Jitter:DDP')
+        if st.button("Predict Diabetes"):
+            try:
+                input_data = [
+                    Pregnancies, Glucose, BloodPressure, SkinThickness,
+                    Insulin, BMI, DiabetesPedigreeFunction, Age
+                ]
+                result = diabetes_model.predict([input_data])[0]
+                if result == 1:
+                    st.success("The person is diabetic.")
+                else:
+                    st.success("The person is not diabetic.")
+            except Exception as e:
+                st.error(f"An error occurred: {e}")
 
-    with col4:
-        Shimmer = st.text_input('MDVP:Shimmer')
+    elif selected == "Heart Disease Prediction":
+        st.subheader("Heart Disease Prediction")
+        col1, col2, col3 = st.columns(3)
 
-    with col5:
-        Shimmer_dB = st.text_input('MDVP:Shimmer(dB)')
+        with col1:
+            age = st.number_input("Age (years)", min_value=0, step=1)
+        with col2:
+            sex = st.selectbox("Gender", ["Male", "Female"])
+            sex = 1 if sex == "Male" else 0
+        with col3:
+            cp = st.selectbox("Chest Pain Type", [
+                "Typical Angina", "Atypical Angina", "Non-Anginal Pain", "Asymptomatic"
+            ], index=3)
+            cp = ["Typical Angina", "Atypical Angina", "Non-Anginal Pain", "Asymptomatic"].index(cp)
 
-    with col1:
-        APQ3 = st.text_input('Shimmer:APQ3')
+        with col1:
+            trestbps = st.number_input("Resting Blood Pressure (mmHg)", min_value=0.0, step=1.0)
+        with col2:
+            chol = st.number_input("Cholesterol Level (mg/dL)", min_value=0.0, step=1.0)
+        with col3:
+            fbs = st.selectbox("Fasting Blood Sugar > 120 mg/dL?", ["No", "Yes"])
+            fbs = 1 if fbs == "Yes" else 0
 
-    with col2:
-        APQ5 = st.text_input('Shimmer:APQ5')
+        with col1:
+            restecg = st.selectbox("Resting ECG Results", ["Normal", "ST-T Wave Abnormality", "Left Ventricular Hypertrophy"])
+            restecg = ["Normal", "ST-T Wave Abnormality", "Left Ventricular Hypertrophy"].index(restecg)
+        with col2:
+            thalach = st.number_input("Max Heart Rate Achieved", min_value=0.0, step=1.0)
+        with col3:
+            exang = st.selectbox("Exercise-Induced Angina", ["No", "Yes"])
+            exang = 1 if exang == "Yes" else 0
 
-    with col3:
-        APQ = st.text_input('MDVP:APQ')
+        with col1:
+            oldpeak = st.number_input("ST Depression Induced by Exercise", min_value=0.0, step=0.1)
+        with col2:
+            slope = st.selectbox("Slope of Peak Exercise ST Segment", ["Upsloping", "Flat", "Downsloping"])
+            slope = ["Upsloping", "Flat", "Downsloping"].index(slope)
+        with col3:
+            ca = st.number_input("Number of Major Vessels Colored by Fluoroscopy", min_value=0, step=1)
+        with col1:
+            thal = st.selectbox("Thalassemia Type", ["Normal", "Fixed Defect", "Reversible Defect"])
+            thal = ["Normal", "Fixed Defect", "Reversible Defect"].index(thal)
 
-    with col4:
-        DDA = st.text_input('Shimmer:DDA')
+        if st.button("Predict Heart Disease"):
+            try:
+                input_data = [
+                    age, sex, cp, trestbps, chol, fbs, restecg, thalach,
+                    exang, oldpeak, slope, ca, thal
+                ]
+                result = heart_disease_model.predict([input_data])[0]
+                if result == 1:
+                    st.success("The person does not have heart disease.")
+                else:
+                    st.success("The person has heart disease.")
+            except Exception as e:
+                st.error(f"An error occurred: {e}")
 
-    with col5:
-        NHR = st.text_input('NHR')
+    elif selected == "Parkinson's Prediction":
+        st.subheader("Parkinson's Prediction")
+        col1, col2, col3 = st.columns(3)
 
-    with col1:
-        HNR = st.text_input('HNR')
+        with col1:
+            fo = st.text_input("MDVP:Fo(Hz)", value="118.0")
+            fhi = st.text_input("MDVP:Fhi(Hz)", value="160.0")
+            flo = st.text_input("MDVP:Flo(Hz)", value="90.0")
+            Jitter_percent = st.text_input("MDVP:Jitter(%)", value="0.010")
+            Jitter_Abs = st.text_input("MDVP:Jitter(Abs)", value="0.005")
+        with col2:
+            RAP = st.text_input("MDVP:RAP", value="0.020")
+            PPQ = st.text_input("MDVP:PPQ", value="0.015")
+            DDP = st.text_input("Jitter:DDP", value="0.025")
+            Shimmer = st.text_input("MDVP:Shimmer", value="0.040")
+            Shimmer_dB = st.text_input("MDVP:Shimmer(dB)", value="0.130")
+        with col3:
+            APQ3 = st.text_input("Shimmer:APQ3", value="0.035")
+            APQ5 = st.text_input("Shimmer:APQ5", value="0.040")
+            APQ = st.text_input("MDVP:APQ", value="0.020")
+            DDA = st.text_input("Shimmer:DDA", value="0.025")
+            NHR = st.text_input("NHR", value="0.120")
+        with col1:
+            HNR = st.text_input("HNR", value="17.5")
+            RPDE = st.text_input("RPDE", value="0.55")
+            DFA = st.text_input("DFA", value="0.85")
+        with col2:
+            spread1 = st.text_input("Spread1", value="3.4")
+            spread2 = st.text_input("Spread2", value="5.1")
+            D2 = st.text_input("D2", value="2.30")
+            PPE = st.text_input("PPE", value="0.78")
 
-    with col2:
-        RPDE = st.text_input('RPDE')
+        if st.button("Predict Parkinson's Disease"):
+            try:
+                # Convert all inputs to floats
+                input_data = [
+                    float(fo), float(fhi), float(flo), float(Jitter_percent), float(Jitter_Abs),
+                    float(RAP), float(PPQ), float(DDP), float(Shimmer), float(Shimmer_dB),
+                    float(APQ3), float(APQ5), float(APQ), float(DDA), float(NHR),
+                    float(HNR), float(RPDE), float(DFA), float(spread1), float(spread2),
+                    float(D2), float(PPE)
+                ]
 
-    with col3:
-        DFA = st.text_input('DFA')
+                # Make prediction
+                result = parkinsons_model.predict([input_data])[0]
 
-    with col4:
-        spread1 = st.text_input('spread1')
+                # Display result
+                if result == 1:
+                    st.success("The person has Parkinson's disease.")
+                else:
+                    st.success("The person does not have Parkinson's disease.")
+            except Exception as e:
+                st.error(f"An error occurred: {e}")
 
-    with col5:
-        spread2 = st.text_input('spread2')
-
-    with col1:
-        D2 = st.text_input('D2')
-
-    with col2:
-        PPE = st.text_input('PPE')
-
-    # code for Prediction
-    parkinsons_diagnosis = ''
-
-    # creating a button for Prediction    
-    if st.button("Parkinson's Test Result"):
-
-        user_input = [fo, fhi, flo, Jitter_percent, Jitter_Abs,
-                      RAP, PPQ, DDP,Shimmer, Shimmer_dB, APQ3, APQ5,
-                      APQ, DDA, NHR, HNR, RPDE, DFA, spread1, spread2, D2, PPE]
-
-        user_input = [float(x) for x in user_input]
-
-        parkinsons_prediction = parkinsons_model.predict([user_input])
-
-        if parkinsons_prediction[0] == 1:
-            parkinsons_diagnosis = "The person has Parkinson's disease"
+# Sidebar Navigation
+username, is_admin = check_login()
+if username:
+    with st.sidebar:
+        if is_admin:
+            selected = option_menu(
+                "Main Menu",
+                ["Dashboard", "Admin Dashboard", "Logout"],
+                icons=["house", "tools", "box-arrow-right"],
+                menu_icon="list",
+                default_index=0,
+            )
         else:
-            parkinsons_diagnosis = "The person does not have Parkinson's disease"
+            selected = option_menu(
+                "Main Menu",
+                ["Dashboard", "Logout"],
+                icons=["house", "box-arrow-right"],
+                menu_icon="list",
+                default_index=0,
+            )
+else:
+    with st.sidebar:
+        selected = option_menu(
+            "Main Menu",
+            ["Home", "Login", "Register"],
+            icons=["house", "key", "plus-circle"],
+            menu_icon="list",
+            default_index=0,
+        )
 
-    st.success(parkinsons_diagnosis)
+# Navigation Logic
+if selected == "Home":
+    homepage()
+elif selected == "Login":
+    login()
+elif selected == "Register":
+    register()
+elif selected == "Dashboard" and username:
+    disease_prediction_dashboard()
+elif selected == "Admin Dashboard" and username and is_admin:
+    admin_dashboard()
+elif selected == "Logout":
+    clear_login()
+    st.success("Logged out successfully!")
+    st.experimental_rerun()
+else:
+    st.warning("Please log in to access this page.")
+
+# Initialize database on first run
+initialize_database()
