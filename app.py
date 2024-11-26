@@ -81,15 +81,49 @@ def load_models():
 
 # Home Page
 def homepage():
-    st.title("Welcome to Health Assistant App 🩺")
-    st.subheader("Your reliable assistant for health predictions and management.")
-    st.write("""
-    This application allows users to:
-    - Predict the likelihood of **Diabetes**, **Heart Disease**, or **Parkinson's Disease** using advanced machine learning models.
-    - Maintain and manage user accounts.
-    - Provide secure login for both users and admins.
-    """)
-    st.info("Please log in or register to access the dashboard.")
+    st.markdown(
+        """
+        <style>
+        .homepage-title {
+            margin-top: -5rem;
+            font-size: 3rem;
+            color: #fff;
+            font-weight: bold;
+            text-align: center;
+        }
+        .homepage-subtitle {
+            font-size: 1.5rem;
+            color: #bbb;
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        </style>
+        """, unsafe_allow_html=True
+    )
+    
+    st.markdown("<div class='homepage-title'>Welcome to Health Assistant App 🩺</div>", unsafe_allow_html=True)
+    st.markdown("<div class='homepage-subtitle'>Your reliable assistant for health predictions and management.</div>", unsafe_allow_html=True)
+    
+    # st.image("https://via.placeholder.com/1200x400?text=Welcome+to+Health+Assistant", use_column_width=True)
+    
+    # Add a horizontal divider
+    st.markdown("---")
+    
+    # Features section
+    st.markdown(
+        """
+        ### Key Features
+        - 🩺 **Predict Diseases**: Analyze the likelihood of Diabetes, Heart Disease, or Parkinson's Disease using advanced machine learning models.
+        - 👥 **User Management**: Securely manage user accounts with admin functionality.
+        - 🔒 **Secure Authentication**: Passwords are hashed for user security.
+        
+        #### Getting Started
+        - Login to access predictions and dashboards.
+        - Register if you're new to the platform.
+        - Navigate using the sidebar menu to explore features.
+        """,
+        unsafe_allow_html=True,
+    )
 
 # Login Page
 def login():
