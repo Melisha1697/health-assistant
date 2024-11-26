@@ -104,7 +104,7 @@ def homepage():
     st.markdown("<div class='homepage-title'>Welcome to Health Assistant App 🩺</div>", unsafe_allow_html=True)
     st.markdown("<div class='homepage-subtitle'>Your reliable assistant for health predictions and management.</div>", unsafe_allow_html=True)
     
-    # st.image("https://via.placeholder.com/1200x400?text=Welcome+to+Health+Assistant", use_column_width=True)
+    st.image("https://raw.githubusercontent.com/Melisha1697/health-assistant/refs/heads/main/assets/health-assistant-banner.png", use_column_width=True)
     
     # Add a horizontal divider
     st.markdown("---")
